@@ -1,112 +1,91 @@
-use fuser::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
-};
-use libc::ENOENT;
-use std::ffi::OsStr;
-use std::time::{Duration, UNIX_EPOCH};
+use std::collections::BTreeMap;
+use std::time::UNIX_EPOCH;
 
-const TTL: Duration = Duration::from_secs(1); // 1 second
+use fuser::{FileAttr, FileType};
+use libc::{getgid, getuid};
 
-const HELLO_DIR_ATTR: FileAttr = FileAttr {
-    ino: 1,
-    size: 0,
-    blocks: 0,
-    atime: UNIX_EPOCH, // 1970-01-01 00:00:00
-    mtime: UNIX_EPOCH,
-    ctime: UNIX_EPOCH,
-    crtime: UNIX_EPOCH,
-    kind: FileType::Directory,
-    perm: 0o755,
-    nlink: 2,
-    uid: 501,
-    gid: 20,
-    rdev: 0,
-    flags: 0,
-    blksize: 512,
-};
+use crate::sqs::SQSClient;
 
-const HELLO_TXT_CONTENT: &str = "Hello World!\n";
+pub struct Metadata {
+    pub file_name: String,
+    pub file_attr: FileAttr,
+}
 
-const HELLO_TXT_ATTR: FileAttr = FileAttr {
-    ino: 2,
-    size: 13,
-    blocks: 1,
-    atime: UNIX_EPOCH, // 1970-01-01 00:00:00
-    mtime: UNIX_EPOCH,
-    ctime: UNIX_EPOCH,
-    crtime: UNIX_EPOCH,
-    kind: FileType::RegularFile,
-    perm: 0o644,
-    nlink: 1,
-    uid: 501,
-    gid: 20,
-    rdev: 0,
-    flags: 0,
-    blksize: 512,
-};
+pub struct SQSFileSystem {
+    superblock: BTreeMap<u64, Metadata>,
+    aux_map: BTreeMap<String, u64>,
+    sqsclient: SQSClient,
+}
 
-pub struct SimpleQueueServiceFileSystem;
-
-impl Filesystem for SimpleQueueServiceFileSystem {
-    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        if parent == 1 && name.to_str() == Some("hello.txt") {
-            reply.entry(&TTL, &HELLO_TXT_ATTR, 0);
-        } else {
-            reply.error(ENOENT);
+impl Default for SQSFileSystem {
+    fn default() -> Self {
+        SQSFileSystem {
+            superblock: BTreeMap::new(),
+            aux_map: BTreeMap::new(),
+            sqsclient: SQSClient::new(),
         }
     }
+}
 
-    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        match ino {
-            1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
-            2 => reply.attr(&TTL, &HELLO_TXT_ATTR),
-            _ => reply.error(ENOENT),
+impl SQSFileSystem {
+    fn refresh(&mut self) {
+        // purge local cache
+        self.aux_map.clear();
+        self.superblock.clear();
+
+        // fetch fresh ones
+        let queues = self.sqsclient.list_queues();
+
+        // populate cache
+        let mut fake_ino = 2u64;
+        for queue in queues.unwrap() {
+            self.superblock.insert(fake_ino, Metadata {
+                file_name: queue.clone(),
+                file_attr: FileAttr {
+                    ino: fake_ino,
+                    size: 13,
+                    blocks: 1,
+                    atime: UNIX_EPOCH, // 1970-01-01 00:00:00
+                    mtime: UNIX_EPOCH,
+                    ctime: UNIX_EPOCH,
+                    crtime: UNIX_EPOCH,
+                    kind: FileType::RegularFile,
+                    perm: 0o644,
+                    nlink: 1,
+                    uid: unsafe { getuid() },
+                    gid: unsafe { getgid() },
+                    rdev: 0,
+                    flags: 0,
+                    blksize: 512,
+                },
+            });
+
+            self.aux_map.insert(queue, fake_ino);
+
+            fake_ino += 1;
         }
     }
+    pub fn list_files(&mut self) -> Vec<&Metadata> {
+        let mut files = vec![];
+        // refresh cache if needed
+        //TODO implement logic - for now it will update cache every time
+        self.refresh();
 
-    fn read(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        _size: u32,
-        _flags: i32,
-        _lock: Option<u64>,
-        reply: ReplyData,
-    ) {
-        if ino == 2 {
-            reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
-        } else {
-            reply.error(ENOENT);
+        for item in self.superblock.values() {
+            files.push(item)
         }
+
+        files
     }
 
-    fn readdir(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        mut reply: ReplyDirectory,
-    ) {
-        if ino != 1 {
-            reply.error(ENOENT);
-            return;
+    pub fn has_file(&self, file_name: &String) -> bool {
+        self.aux_map.contains_key(file_name)
+    }
+    pub fn find_by_name(&self, file_name: &String) -> Option<&Metadata> {
+        if !self.has_file(file_name) {
+            return None;
         }
 
-        let entries = vec![
-            (1, FileType::Directory, "."),
-            (1, FileType::Directory, ".."),
-            (2, FileType::RegularFile, "hello.txt"),
-        ];
-
-        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-            // i + 1 means the index of the next entry
-            if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
-                break;
-            }
-        }
-        reply.ok();
+        self.superblock.get(self.aux_map.get(file_name).unwrap())
     }
 }
