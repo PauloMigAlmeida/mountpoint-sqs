@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{FileAttr, FileType};
 use libc::{getgid, getuid};
+use log::info;
 
+use crate::cli::CliArgs;
 use crate::sqs::SQSClient;
 
 pub struct Metadata {
@@ -15,20 +17,30 @@ pub struct SQSFileSystem {
     superblock: BTreeMap<u64, Metadata>,
     aux_map: BTreeMap<String, u64>,
     sqsclient: SQSClient,
+    last_cache_refresh: SystemTime,
+    cli_args: CliArgs,
 }
 
-impl Default for SQSFileSystem {
-    fn default() -> Self {
+impl SQSFileSystem {
+    pub fn new(cli_args: CliArgs) -> Self {
         SQSFileSystem {
             superblock: BTreeMap::new(),
             aux_map: BTreeMap::new(),
             sqsclient: SQSClient::new(),
+            last_cache_refresh: UNIX_EPOCH,
+            cli_args,
         }
     }
-}
 
-impl SQSFileSystem {
     fn refresh(&mut self) {
+        // check if we need to refresh the cache or if we can use what we have
+        if self.last_cache_refresh.elapsed().unwrap() < Duration::from_secs(self.cli_args.cache_ttl_in_secs) {
+            info!("no need to refresh the cache");
+            return;
+        } else {
+            info!("refreshing the cache");
+        }
+
         // purge local cache
         self.aux_map.clear();
         self.superblock.clear();
@@ -64,11 +76,14 @@ impl SQSFileSystem {
 
             fake_ino += 1;
         }
+
+        // update cache control
+        self.last_cache_refresh = SystemTime::now();
     }
     pub fn list_files(&mut self) -> Vec<&Metadata> {
         let mut files = vec![];
+
         // refresh cache if needed
-        //TODO implement logic - for now it will update cache every time
         self.refresh();
 
         for item in self.superblock.values() {

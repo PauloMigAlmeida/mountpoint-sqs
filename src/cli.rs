@@ -2,13 +2,16 @@ use std::path::PathBuf;
 
 use anyhow::anyhow;
 use clap::{ArgAction, crate_name, crate_version, Parser};
-use fuser::{Filesystem, MountOption};
+use fuser::MountOption;
 use log::debug;
 use procfs::process::Process;
 
-const MOUNT_OPTIONS_HEADER: &str = "Mount options";
+use crate::fuse::SQSFuse;
 
-#[derive(Parser, Debug)]
+const MOUNT_OPTIONS_HEADER: &str = "Mount options";
+const SQS_OPTIONS_HEADER: &str = "SQS options";
+
+#[derive(Parser, Debug, Clone)]
 #[command(version = crate_version!(), bin_name = crate_name!())]
 pub struct CliArgs {
     #[arg(
@@ -32,6 +35,15 @@ pub struct CliArgs {
     help_heading = MOUNT_OPTIONS_HEADER,
     )]
     allow_root: bool,
+
+    #[arg(
+    short,
+    long,
+    help = "How long to keep SQS queues cache locally",
+    default_value = "30",
+    help_heading = SQS_OPTIONS_HEADER,
+    )]
+    pub cache_ttl_in_secs: u64,
 }
 
 impl CliArgs {
@@ -83,7 +95,7 @@ fn validate_mountpoint(path: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn main<FS: Filesystem>(filesystem: FS) {
+pub fn main() {
     // parsing arguments
     let args = CliArgs::parse();
     let options = args.build_options();
@@ -92,5 +104,10 @@ pub fn main<FS: Filesystem>(filesystem: FS) {
     validate_mountpoint(&args.mount_point).expect("Failure when validating mount point");
 
     // mount sqsfs
-    fuser::mount2(filesystem, args.mount_point, &options).unwrap();
+    let fuse_fs = SQSFuse::new(args.clone());
+    fuser::mount2(
+        fuse_fs,
+        args.mount_point,
+        &options,
+    ).unwrap();
 }

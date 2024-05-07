@@ -1,5 +1,3 @@
-use crate::fuse::SQSFuse;
-
 mod cli;
 mod fuse;
 mod sqs;
@@ -9,5 +7,5 @@ fn main() {
     // Init logging
     env_logger::init();
     // Launch fuse client
-    cli::main(SQSFuse::default())
+    cli::main()
 }

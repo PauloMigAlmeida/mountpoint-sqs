@@ -7,6 +7,7 @@ use fuser::{
 use libc::ENOENT;
 use log::info;
 
+use crate::cli::CliArgs;
 use crate::filesystem::SQSFileSystem;
 
 const TTL: Duration = Duration::from_secs(1); // 1 second
@@ -36,10 +37,10 @@ pub struct SQSFuse {
     sqs_fs: SQSFileSystem,
 }
 
-impl Default for SQSFuse {
-    fn default() -> Self {
+impl SQSFuse {
+    pub fn new(cli_args: CliArgs) -> Self {
         SQSFuse {
-            sqs_fs: SQSFileSystem::default(),
+            sqs_fs: SQSFileSystem::new(cli_args),
         }
     }
 }
@@ -98,7 +99,6 @@ impl Filesystem for SQSFuse {
         let mut entries = vec![
             (1, FileType::Directory, ".".to_string()),
             (1, FileType::Directory, "..".to_string()),
-            // (2, FileType::RegularFile, "hello.txt".to_string()),
         ];
 
         for file in self.sqs_fs.list_files() {
