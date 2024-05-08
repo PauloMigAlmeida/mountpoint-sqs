@@ -1,8 +1,8 @@
 use std::ffi::OsStr;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use fuser::{
-    FileAttr, Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
+    Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
 };
 use libc::ENOENT;
 use log::info;
@@ -10,36 +10,15 @@ use log::info;
 use crate::cli::CliArgs;
 use crate::filesystem::SQSFileSystem;
 
-const TTL: Duration = Duration::from_secs(1); // 1 second
-
-const HELLO_DIR_ATTR: FileAttr = FileAttr {
-    ino: 1,
-    size: 0,
-    blocks: 0,
-    atime: UNIX_EPOCH, // 1970-01-01 00:00:00
-    mtime: UNIX_EPOCH,
-    ctime: UNIX_EPOCH,
-    crtime: UNIX_EPOCH,
-    kind: FileType::Directory,
-    perm: 0o755,
-    nlink: 2,
-    uid: 1000, //TODO fix this
-    gid: 1000,
-    rdev: 0,
-    flags: 0,
-    blksize: 512,
-};
-
-// const HELLO_TXT_CONTENT: &str = "Hello World!\n";
-
-
 pub struct SQSFuse {
     sqs_fs: SQSFileSystem,
+    default_ttl: Duration,
 }
 
 impl SQSFuse {
     pub fn new(cli_args: CliArgs) -> Self {
         SQSFuse {
+            default_ttl: Duration::from_secs(cli_args.cache_ttl_in_secs),
             sqs_fs: SQSFileSystem::new(cli_args),
         }
     }
@@ -50,16 +29,21 @@ impl Filesystem for SQSFuse {
         let fname = name.to_os_string().into_string().unwrap();
         if parent == 1 && self.sqs_fs.has_file(&fname) {
             let metadata = self.sqs_fs.find_by_name(&fname).unwrap();
-            reply.entry(&TTL, &metadata.file_attr, 0);
+            reply.entry(&self.default_ttl, &metadata.file_attr, 0);
         } else {
             reply.error(ENOENT);
         }
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        match ino {
-            1 => reply.attr(&TTL, &HELLO_DIR_ATTR),
-            _ => reply.error(ENOENT),
+        info!("getattr: ino:{ino}");
+        let file_metadata = self.sqs_fs.find_by_inode(ino);
+
+        if file_metadata.is_some() {
+            let metadata = file_metadata.unwrap();
+            reply.attr(&self.default_ttl, &metadata.file_attr);
+        } else {
+            reply.error(ENOENT);
         }
     }
     //
@@ -89,7 +73,7 @@ impl Filesystem for SQSFuse {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        info!("readdir being called");
+        info!("readdir ino: {ino} fh: {_fh} offset: {offset}");
 
         if ino != 1 {
             reply.error(ENOENT);
@@ -102,7 +86,7 @@ impl Filesystem for SQSFuse {
         ];
 
         for file in self.sqs_fs.list_files() {
-            entries.push((file.file_attr.ino, FileType::RegularFile, file.file_name.clone()));
+            entries.push((file.file_attr.ino, file.file_attr.kind, file.file_name.clone()));
         }
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {

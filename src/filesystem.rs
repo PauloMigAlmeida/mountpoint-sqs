@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{FileAttr, FileType};
 use libc::{getgid, getuid};
-use log::info;
+use log::debug;
 
 use crate::cli::CliArgs;
 use crate::sqs::SQSClient;
@@ -17,7 +17,7 @@ pub struct SQSFileSystem {
     superblock: BTreeMap<u64, Metadata>,
     aux_map: BTreeMap<String, u64>,
     sqsclient: SQSClient,
-    last_cache_refresh: SystemTime,
+    last_refresh: SystemTime,
     cli_args: CliArgs,
 }
 
@@ -27,58 +27,53 @@ impl SQSFileSystem {
             superblock: BTreeMap::new(),
             aux_map: BTreeMap::new(),
             sqsclient: SQSClient::new(),
-            last_cache_refresh: UNIX_EPOCH,
+            last_refresh: UNIX_EPOCH,
             cli_args,
         }
     }
 
     fn refresh(&mut self) {
         // check if we need to refresh the cache or if we can use what we have
-        if self.last_cache_refresh.elapsed().unwrap() < Duration::from_secs(self.cli_args.cache_ttl_in_secs) {
-            info!("no need to refresh the cache");
+        if self.last_refresh.elapsed().unwrap() < Duration::from_secs(self.cli_args.cache_ttl_in_secs) {
+            debug!("no need to refresh the cache");
             return;
         } else {
-            info!("refreshing the cache");
+            debug!("refreshing the cache");
         }
 
         // purge local cache
         self.aux_map.clear();
         self.superblock.clear();
 
-        // fetch fresh ones
+        // populate cache
+        self.do_refresh();
+
+        // update cache control
+        self.last_refresh = SystemTime::now();
+    }
+
+    fn do_refresh(&mut self) {
+        // add top level directory
+        self.superblock.insert(1, Metadata {
+            file_name: ".".to_string(),
+            file_attr: build_fileattr(1, FileType::Directory),
+        });
+
+        // fetch queues
         let queues = self.sqsclient.list_queues();
 
-        // populate cache
+        // add queues
         let mut fake_ino = 2u64;
         for queue in queues.unwrap() {
             self.superblock.insert(fake_ino, Metadata {
                 file_name: queue.clone(),
-                file_attr: FileAttr {
-                    ino: fake_ino,
-                    size: 13,
-                    blocks: 1,
-                    atime: UNIX_EPOCH, // 1970-01-01 00:00:00
-                    mtime: UNIX_EPOCH,
-                    ctime: UNIX_EPOCH,
-                    crtime: UNIX_EPOCH,
-                    kind: FileType::RegularFile,
-                    perm: 0o644,
-                    nlink: 1,
-                    uid: unsafe { getuid() },
-                    gid: unsafe { getgid() },
-                    rdev: 0,
-                    flags: 0,
-                    blksize: 512,
-                },
+                file_attr: build_fileattr(fake_ino, FileType::RegularFile),
             });
 
             self.aux_map.insert(queue, fake_ino);
 
             fake_ino += 1;
         }
-
-        // update cache control
-        self.last_cache_refresh = SystemTime::now();
     }
     pub fn list_files(&mut self) -> Vec<&Metadata> {
         let mut files = vec![];
@@ -87,7 +82,9 @@ impl SQSFileSystem {
         self.refresh();
 
         for item in self.superblock.values() {
-            files.push(item)
+            if item.file_attr.ino != 1 {
+                files.push(item)
+            }
         }
 
         files
@@ -96,11 +93,59 @@ impl SQSFileSystem {
     pub fn has_file(&self, file_name: &String) -> bool {
         self.aux_map.contains_key(file_name)
     }
-    pub fn find_by_name(&self, file_name: &String) -> Option<&Metadata> {
+    pub fn find_by_name(&mut self, file_name: &String) -> Option<&Metadata> {
+        // refresh cache if needed
+        self.refresh();
+
         if !self.has_file(file_name) {
             return None;
         }
 
         self.superblock.get(self.aux_map.get(file_name).unwrap())
+    }
+
+    pub fn find_by_inode(&mut self, inode: u64) -> Option<&Metadata> {
+        // refresh cache if needed
+        self.refresh();
+
+        self.superblock.get(&inode)
+    }
+}
+
+fn build_fileattr(inode: u64, kind: FileType) -> FileAttr {
+    let size: u64;
+    let perm: u16;
+    let nlink: u32;
+    let blksize: u32 = 512;
+
+    match kind {
+        FileType::Directory => {
+            size = 0;
+            perm = 0o755;
+            nlink = 2;
+        }
+        _ => {
+            size = 1 * 1024 * 1024;
+            perm = 0o644;
+            nlink = 1;
+        }
+    }
+
+    FileAttr {
+        ino: inode,
+        size,
+        blocks: size / blksize as u64,
+        atime: UNIX_EPOCH, // 1970-01-01 00:00:00
+        mtime: UNIX_EPOCH,
+        ctime: UNIX_EPOCH,
+        crtime: UNIX_EPOCH,
+        kind,
+        perm,
+        nlink,
+        uid: unsafe { getuid() },
+        gid: unsafe { getgid() },
+        rdev: 0,
+        flags: 0,
+        blksize,
     }
 }
