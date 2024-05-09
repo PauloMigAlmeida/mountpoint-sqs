@@ -1,11 +1,9 @@
 use std::ffi::OsStr;
 use std::time::Duration;
 
-use fuser::{
-    Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
-};
-use libc::ENOENT;
-use log::info;
+use fuser::{Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyWrite, Request};
+use libc::{ENOENT, ENOSYS};
+use log::{debug, info};
 
 use crate::cli::CliArgs;
 use crate::filesystem::SQSFileSystem;
@@ -97,5 +95,31 @@ impl Filesystem for SQSFuse {
         }
 
         reply.ok();
+    }
+
+    fn write(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        data: &[u8],
+        write_flags: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
+        reply: ReplyWrite,
+    ) {
+        debug!(
+            "write(ino: {:#x?}, fh: {}, offset: {}, data.len(): {}, \
+            write_flags: {:#x?}, flags: {:#x?}, lock_owner: {:?})",
+            ino,
+            fh,
+            offset,
+            data.len(),
+            write_flags,
+            flags,
+            lock_owner
+        );
+        reply.error(ENOSYS);
     }
 }
