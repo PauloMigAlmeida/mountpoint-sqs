@@ -1,16 +1,18 @@
 use std::ffi::OsStr;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
-use fuser::{Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyWrite, Request};
-use libc::{ENOENT, ENOSYS};
+use fuser::{Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
+use libc::ENOSYS;
 use log::{debug, info};
 
 use crate::cli::CliArgs;
-use crate::filesystem::SQSFileSystem;
+use crate::filesystem::{Metadata, SQSFileSystem};
 
 pub struct SQSFuse {
     sqs_fs: SQSFileSystem,
     default_ttl: Duration,
+    next_file_handle: AtomicU64,
 }
 
 impl SQSFuse {
@@ -18,6 +20,7 @@ impl SQSFuse {
         SQSFuse {
             default_ttl: Duration::from_secs(cli_args.cache_ttl_in_secs),
             sqs_fs: SQSFileSystem::new(cli_args),
+            next_file_handle: AtomicU64::default(),
         }
     }
 }
@@ -29,7 +32,7 @@ impl Filesystem for SQSFuse {
             let metadata = self.sqs_fs.find_by_name(&fname).unwrap();
             reply.entry(&self.default_ttl, &metadata.file_attr, 0);
         } else {
-            reply.error(ENOENT);
+            reply.error(libc::ENOENT);
         }
     }
 
@@ -41,7 +44,7 @@ impl Filesystem for SQSFuse {
             let metadata = file_metadata.unwrap();
             reply.attr(&self.default_ttl, &metadata.file_attr);
         } else {
-            reply.error(ENOENT);
+            reply.error(libc::ENOENT);
         }
     }
     //
@@ -74,7 +77,7 @@ impl Filesystem for SQSFuse {
         info!("readdir ino: {ino} fh: {_fh} offset: {offset}");
 
         if ino != 1 {
-            reply.error(ENOENT);
+            reply.error(libc::ENOENT);
             return;
         }
 
@@ -97,6 +100,73 @@ impl Filesystem for SQSFuse {
         reply.ok();
     }
 
+    /// Open a file.
+    /// Open flags (with the exception of O_CREAT, O_EXCL, O_NOCTTY and O_TRUNC) are
+    /// available in flags. Filesystem may store an arbitrary file handle (pointer, index,
+    /// etc) in fh, and use this in other all other file operations (read, write, flush,
+    /// release, fsync). Filesystem may also implement stateless file I/O and not store
+    /// anything in fh. There are also some flags (direct_io, keep_cache) which the
+    /// filesystem may set, to change the way the file is opened. See fuse_file_info
+    /// structure in <fuse_common.h> for more details.
+    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+        debug!(
+            "open(ino: {:#x?}, flags: {:#x?})",
+            ino,
+            flags,
+        );
+
+        // Check access mode
+        let access_mask = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => {
+                // Behavior is undefined, but most filesystems return EACCES
+                if flags & libc::O_TRUNC != 0 {
+                    reply.error(libc::EACCES);
+                    return;
+                }
+                libc::R_OK as u16
+            }
+            libc::O_WRONLY => libc::W_OK as u16,
+            libc::O_RDWR => libc::R_OK as u16 | libc::W_OK as u16,
+            // Exactly one access mode flag must be specified
+            _ => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+
+        // Check if file exists
+        let op_metadata = self.sqs_fs.find_by_inode(ino);
+        if op_metadata.is_none() {
+            reply.error(libc::ENOENT);
+            return;
+        }
+
+        // Check if user has sufficient permissions
+        let metadata = op_metadata.unwrap();
+        if !check_access(metadata, _req, access_mask) {
+            reply.error(libc::EACCES);
+            return;
+        }
+
+        // create file handle
+        let fh = self.next_file_handle.fetch_add(1, Ordering::SeqCst);
+        reply.opened(fh, 0);
+    }
+
+    
+    /// Write data.
+    /// Write should return exactly the number of bytes requested except on error. An
+    /// exception to this is when the file has been opened in 'direct_io' mode, in
+    /// which case the return value of the write system call will reflect the return
+    /// value of this operation. fh will contain the value set by the open method, or
+    /// will be undefined if the open method didn't set any value.
+    ///
+    /// write_flags: will contain FUSE_WRITE_CACHE, if this write is from the page cache. If set,
+    /// the pid, uid, gid, and fh may not match the value that would have been sent if write cachin
+    /// is disabled
+    /// flags: these are the file flags, such as O_SYNC. Only supported with ABI >= 7.9
+    /// lock_owner: only supported with ABI >= 7.9
     fn write(
         &mut self,
         _req: &Request<'_>,
@@ -120,6 +190,35 @@ impl Filesystem for SQSFuse {
             flags,
             lock_owner
         );
-        reply.error(ENOSYS);
+        reply.error(libc::ENOSYS);
     }
+}
+
+fn check_access(
+    file_metadata: &Metadata,
+    req: &Request,
+    access_mask: u16,
+) -> bool {
+    let mut owner = false;
+    let mut group = false;
+    let mut others = false;
+
+    // root is allowed to read & write anything
+    if req.uid() == 0 {
+        return true;
+    }
+    // Scratchpad
+    // owner  rw = 6 = 110
+    // group  r  = 4 = 100
+    // others r  = 4 = 100
+
+    if file_metadata.file_attr.uid == req.uid() {
+        owner = access_mask & (file_metadata.file_attr.perm >> 6) > 0;
+    } else if file_metadata.file_attr.gid == req.gid() {
+        group = access_mask & (file_metadata.file_attr.perm >> 3) > 0;
+    } else {
+        others = access_mask & (file_metadata.file_attr.perm) > 0;
+    }
+
+    return owner | group | others;
 }
