@@ -3,8 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use fuser::{Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
-use libc::ENOSYS;
-use log::{debug, info};
+use log::{debug, info, warn};
 
 use crate::cli::CliArgs;
 use crate::filesystem::{Metadata, SQSFileSystem};
@@ -66,38 +65,41 @@ impl Filesystem for SQSFuse {
     //     }
     // }
 
-    fn readdir(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        mut reply: ReplyDirectory,
-    ) {
-        info!("readdir ino: {ino} fh: {_fh} offset: {offset}");
+    fn setattr(&mut self, _req: &Request<'_>, ino: u64, mode: Option<u32>, uid: Option<u32>, gid: Option<u32>, size: Option<u64>, atime: Option<TimeOrNow>, mtime: Option<TimeOrNow>, _ctime: Option<SystemTime>, fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, flags: Option<u32>, reply: ReplyAttr) {
+        debug!(
+            "setattr(ino: {:#x?}, mode: {:?}, uid: {:?}, \
+            gid: {:?}, size: {:?}, fh: {:?}, flags: {:?})",
+            ino, mode, uid, gid, size, fh, flags
+        );
 
-        if ino != 1 {
-            reply.error(libc::ENOENT);
+        let metadata = match self.sqs_fs.find_by_inode(ino) {
+            Some(metadata) => metadata,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        if mode.is_some() {
+            warn!("chmod() isn't supported - \
+                files given the same uid/gid of the user whom mounted sqsfs");
+            reply.error(libc::ENOSYS);
             return;
         }
 
-        let mut entries = vec![
-            (1, FileType::Directory, ".".to_string()),
-            (1, FileType::Directory, "..".to_string()),
-        ];
-
-        for file in self.sqs_fs.list_files() {
-            entries.push((file.file_attr.ino, file.file_attr.kind, file.file_name.clone()));
+        if size.is_some() {
+            warn!("truncate() or O_TRUNC flag aren't supported as this doesn't make much sense \
+            the SQS queues context. Ignoring operation....");
         }
 
-        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
-            // i + 1 means the index of the next entry
-            if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
-                break;
-            }
+        if atime.is_some() || mtime.is_some() {
+            warn!("utimens() isn't supported");
+            reply.error(libc::ENOSYS);
+            return;
         }
 
-        reply.ok();
+        reply.attr(&Duration::new(0, 0), &metadata.file_attr.into());
+        return;
     }
 
     /// Open a file.
@@ -136,14 +138,15 @@ impl Filesystem for SQSFuse {
 
 
         // Check if file exists
-        let op_metadata = self.sqs_fs.find_by_inode(ino);
-        if op_metadata.is_none() {
-            reply.error(libc::ENOENT);
-            return;
-        }
+        let metadata = match self.sqs_fs.find_by_inode(ino) {
+            Some(metadata) => metadata,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
 
         // Check if user has sufficient permissions
-        let metadata = op_metadata.unwrap();
         if !check_access(metadata, _req, access_mask) {
             reply.error(libc::EACCES);
             return;
@@ -154,7 +157,6 @@ impl Filesystem for SQSFuse {
         reply.opened(fh, 0);
     }
 
-    
     /// Write data.
     /// Write should return exactly the number of bytes requested except on error. An
     /// exception to this is when the file has been opened in 'direct_io' mode, in
@@ -191,6 +193,40 @@ impl Filesystem for SQSFuse {
             lock_owner
         );
         reply.error(libc::ENOSYS);
+    }
+
+    fn readdir(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
+        info!("readdir ino: {ino} fh: {_fh} offset: {offset}");
+
+        if ino != 1 {
+            reply.error(libc::ENOENT);
+            return;
+        }
+
+        let mut entries = vec![
+            (1, FileType::Directory, ".".to_string()),
+            (1, FileType::Directory, "..".to_string()),
+        ];
+
+        for file in self.sqs_fs.list_files() {
+            entries.push((file.file_attr.ino, file.file_attr.kind, file.file_name.clone()));
+        }
+
+        for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+            // i + 1 means the index of the next entry
+            if reply.add(entry.0, (i + 1) as i64, entry.1, entry.2) {
+                break;
+            }
+        }
+
+        reply.ok();
     }
 }
 
