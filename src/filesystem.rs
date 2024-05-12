@@ -68,13 +68,15 @@ impl SQSFileSystem {
             // add queues
             let mut fake_ino = 2u64;
             for queue in queues {
+                let queue_name = sqs::get_queue_name(queue.as_str()).unwrap();
+
                 self.superblock.insert(fake_ino, Metadata {
-                    queue_name: sqs::get_queue_name(queue.as_str()).unwrap(),
-                    queue_url: queue.clone(),
+                    queue_name: queue_name.clone(),
+                    queue_url: queue,
                     file_attr: build_fileattr(fake_ino, FileType::RegularFile),
                 });
 
-                self.aux_map.insert(queue, fake_ino);
+                self.aux_map.insert(queue_name, fake_ino);
 
                 fake_ino += 1;
             }
