@@ -31,10 +31,14 @@ cat /mnt/sqs/my_queue
 
 ## Build
 
-On Fedora:
+Install dependencies:
 
 ```bash
+# On Fedora
 dnf install fuse3 fuse3-devel
+
+# On Ubuntu
+apt install fuse3 libfuse3-dev
 ```
 
 To build it, just run:
