@@ -147,6 +147,10 @@ impl SQSFileSystem {
             None => false,
         }
     }
+
+    pub fn release_file_handler(&mut self, fh: u64) {
+        self.fh_map.remove(&fh);
+    }
 }
 
 fn build_fileattr(inode: u64, kind: FileType) -> FileAttr {

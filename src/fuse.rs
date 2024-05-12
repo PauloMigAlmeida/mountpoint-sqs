@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::time::{Duration, SystemTime};
 
-use fuser::{Filesystem, FileType, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
+use fuser::{Filesystem, FileType, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
 use log::{debug, info, warn};
 
 use crate::cli::CliArgs;
@@ -218,7 +218,7 @@ impl Filesystem for SQSFuse {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        info!("readdir ino: {ino} fh: {_fh} offset: {offset}");
+        debug!("readdir ino: {ino} fh: {_fh} offset: {offset}");
 
         if ino != 1 {
             reply.error(libc::ENOENT);
@@ -241,6 +241,12 @@ impl Filesystem for SQSFuse {
             }
         }
 
+        reply.ok();
+    }
+
+    fn release(&mut self, _req: &Request<'_>, ino: u64, fh: u64, flags: i32, _lock_owner: Option<u64>, _flush: bool, reply: ReplyEmpty) {
+        debug!("release ino: {ino} fh: {fh} flags: {flags}");
+        self.sqs_fs.release_file_handler(fh);
         reply.ok();
     }
 }
