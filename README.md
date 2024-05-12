@@ -1,5 +1,6 @@
 mountpoint-sqs
 ==============
+[![Build](https://github.com/PauloMigAlmeida/mountpoint-sqs/actions/workflows/rust.yml/badge.svg)](https://github.com/PauloMigAlmeida/mountpoint-sqs/actions/workflows/rust.yml)
 
 Mountpoint-SQS is a simple and lightweight filesystem that exposes Amazon Simple Queue Service (SQS) as if it were a
 filesystem, adhering to the Unix philosophy of "everything is a file". This allows you to interact with SQS queues using
