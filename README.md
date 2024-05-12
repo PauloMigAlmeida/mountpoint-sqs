@@ -4,7 +4,7 @@ mountpoint-sqs
 
 Mountpoint-SQS is a simple and lightweight filesystem that exposes Amazon Simple Queue Service (SQS) as if it were a
 filesystem, adhering to the Unix philosophy of "everything is a file". This allows you to interact with SQS queues using
-familiar file system operations such as reading, writing, and listing files.
+familiar file system CLI utilities for reading, writing, and listing files.
 
 ## Features
 
