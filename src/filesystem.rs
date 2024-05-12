@@ -6,10 +6,13 @@ use libc::{getgid, getuid};
 use log::debug;
 
 use crate::cli::CliArgs;
+use crate::sqs;
 use crate::sqs::SQSClient;
 
+#[derive(Clone)]
 pub struct Metadata {
-    pub file_name: String,
+    pub queue_name: String,
+    pub queue_url: String,
     pub file_attr: FileAttr,
 }
 
@@ -55,7 +58,8 @@ impl SQSFileSystem {
     fn do_refresh(&mut self) {
         // add top level directory
         self.superblock.insert(1, Metadata {
-            file_name: ".".to_string(),
+            queue_name: ".".to_string(),
+            queue_url: "".to_string(),
             file_attr: build_fileattr(1, FileType::Directory),
         });
 
@@ -66,7 +70,8 @@ impl SQSFileSystem {
         let mut fake_ino = 2u64;
         for queue in queues.unwrap() {
             self.superblock.insert(fake_ino, Metadata {
-                file_name: queue.clone(),
+                queue_name: sqs::get_queue_name(queue.as_str()).unwrap(),
+                queue_url: queue.clone(),
                 file_attr: build_fileattr(fake_ino, FileType::RegularFile),
             });
 
@@ -109,6 +114,10 @@ impl SQSFileSystem {
         self.refresh();
 
         self.superblock.get(&inode)
+    }
+
+    pub fn write(&mut self, metadata: &Metadata, data: &str) -> anyhow::Result<u32> {
+        self.sqsclient.send_message(metadata.queue_url.as_str(), data)
     }
 }
 

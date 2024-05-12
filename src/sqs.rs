@@ -18,8 +18,6 @@ impl SQSClient {
 
     #[tokio::main]
     async fn list_queues_async(&self) -> anyhow::Result<Vec<String>> {
-        let mut queues = vec![];
-
         let response = self.client.list_queues()
             .into_paginator()
             .items()
@@ -27,20 +25,34 @@ impl SQSClient {
             .try_collect()
             .await?;
 
-        for output in response {
-            let queue_name = get_queue_name(output.as_str())?;
-            queues.push(queue_name);
-        }
-
-        Ok(queues)
+        Ok(response)
     }
 
     pub fn list_queues(&self) -> anyhow::Result<Vec<String>> {
         self.list_queues_async()
     }
+
+    #[tokio::main]
+    async fn send_message_async(&self, queue_url: &str, message: &str) -> anyhow::Result<u32> {
+        if message.len() > 256 * 1024 {
+            return Err(anyhow!("message length can't be above 256kb as per SQS limits"));
+        }
+
+        self.client.send_message()
+            .queue_url(queue_url)
+            .message_body(message)
+            .send()
+            .await?;
+
+        Ok(message.len() as u32)
+    }
+
+    pub fn send_message(&self, queue_url: &str, message: &str) -> anyhow::Result<u32> {
+        self.send_message_async(queue_url, message)
+    }
 }
 
-fn get_queue_name(queue_url: &str) -> anyhow::Result<String> {
+pub fn get_queue_name(queue_url: &str) -> anyhow::Result<String> {
     let url = Url::parse(queue_url)?;
 
     let segments = url.path_segments();

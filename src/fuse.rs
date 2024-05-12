@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-use fuser::{Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
+use fuser::{Filesystem, FileType, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
 use log::{debug, info, warn};
 
 use crate::cli::CliArgs;
@@ -46,24 +46,6 @@ impl Filesystem for SQSFuse {
             reply.error(libc::ENOENT);
         }
     }
-    //
-    // fn read(
-    //     &mut self,
-    //     _req: &Request,
-    //     ino: u64,
-    //     _fh: u64,
-    //     offset: i64,
-    //     _size: u32,
-    //     _flags: i32,
-    //     _lock: Option<u64>,
-    //     reply: ReplyData,
-    // ) {
-    //     if ino == 2 {
-    //         reply.data(&HELLO_TXT_CONTENT.as_bytes()[offset as usize..]);
-    //     } else {
-    //         reply.error(ENOENT);
-    //     }
-    // }
 
     fn setattr(&mut self, _req: &Request<'_>, ino: u64, mode: Option<u32>, uid: Option<u32>, gid: Option<u32>, size: Option<u64>, atime: Option<TimeOrNow>, mtime: Option<TimeOrNow>, _ctime: Option<SystemTime>, fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, flags: Option<u32>, reply: ReplyAttr) {
         debug!(
@@ -192,7 +174,37 @@ impl Filesystem for SQSFuse {
             flags,
             lock_owner
         );
-        reply.error(libc::ENOSYS);
+
+        //TODO check for open mode
+
+        // SQS accepts UTF-8 messages, can we convert data into utf-8?
+        let msg = match String::from_utf8(data.to_vec()) {
+            Ok(msg) => msg,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        // Check if file exists
+        let metadata = match self.sqs_fs.find_by_inode(ino) {
+            Some(metadata) => metadata.clone(),
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        // send data to SQS
+        let written = match self.sqs_fs.write(&metadata, msg.as_str()) {
+            Ok(written) => written,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        reply.written(written);
     }
 
     fn readdir(
@@ -216,7 +228,7 @@ impl Filesystem for SQSFuse {
         ];
 
         for file in self.sqs_fs.list_files() {
-            entries.push((file.file_attr.ino, file.file_attr.kind, file.file_name.clone()));
+            entries.push((file.file_attr.ino, file.file_attr.kind, file.queue_name.clone()));
         }
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
@@ -244,6 +256,7 @@ fn check_access(
         return true;
     }
     // Scratchpad
+    // perm = 0o644 = 0b110100100
     // owner  rw = 6 = 110
     // group  r  = 4 = 100
     // others r  = 4 = 100
