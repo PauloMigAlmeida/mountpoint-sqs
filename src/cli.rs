@@ -29,14 +29,6 @@ pub struct CliArgs {
     auto_unmount: bool,
 
     #[arg(
-    long,
-    help = "Allow root user to access filesystem",
-    action = ArgAction::SetTrue,
-    help_heading = MOUNT_OPTIONS_HEADER,
-    )]
-    allow_root: bool,
-
-    #[arg(
     short,
     long,
     help = "How long to keep SQS queues cache locally",
@@ -54,9 +46,6 @@ impl CliArgs {
         ];
         if self.auto_unmount {
             options.push(MountOption::AutoUnmount);
-        }
-        if self.allow_root {
-            options.push(MountOption::AllowRoot);
         }
         options
     }
