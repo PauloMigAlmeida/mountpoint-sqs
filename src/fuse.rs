@@ -1,8 +1,8 @@
 use std::ffi::OsStr;
 use std::time::{Duration, SystemTime};
 
-use fuser::{Filesystem, FileType, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
-use log::{debug, info, warn};
+use fuser::{Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
+use log::{debug, error, info, warn};
 
 use crate::cli::CliArgs;
 use crate::filesystem::{Metadata, SQSFileSystem};
@@ -10,7 +10,6 @@ use crate::filesystem::{Metadata, SQSFileSystem};
 pub struct SQSFuse {
     sqs_fs: SQSFileSystem,
     default_ttl: Duration,
-    // next_file_handle: AtomicU64,
 }
 
 impl SQSFuse {
@@ -18,7 +17,6 @@ impl SQSFuse {
         SQSFuse {
             default_ttl: Duration::from_secs(cli_args.cache_ttl_in_secs),
             sqs_fs: SQSFileSystem::new(cli_args),
-            // next_file_handle: AtomicU64::default(),
         }
     }
 }
@@ -134,22 +132,44 @@ impl Filesystem for SQSFuse {
         }
 
         // create file handle
-        let fh = self.sqs_fs.create_file_handler(ino, access_mask);
+        let fh = self.sqs_fs.create_file_handler(access_mask);
         reply.opened(fh, 0);
     }
 
-    /// Write data.
-    /// Write should return exactly the number of bytes requested except on error. An
-    /// exception to this is when the file has been opened in 'direct_io' mode, in
-    /// which case the return value of the write system call will reflect the return
-    /// value of this operation. fh will contain the value set by the open method, or
-    /// will be undefined if the open method didn't set any value.
-    ///
-    /// write_flags: will contain FUSE_WRITE_CACHE, if this write is from the page cache. If set,
-    /// the pid, uid, gid, and fh may not match the value that would have been sent if write cachin
-    /// is disabled
-    /// flags: these are the file flags, such as O_SYNC. Only supported with ABI >= 7.9
-    /// lock_owner: only supported with ABI >= 7.9
+    fn read(&mut self, _req: &Request<'_>, ino: u64, fh: u64, offset: i64, size: u32, flags: i32, lock_owner: Option<u64>, reply: ReplyData) {
+        debug!(
+            "read(ino: {:#x?}, fh: {}, offset: {}, size: {}, \
+            flags: {:#x?}, lock_owner: {:?})",
+            ino, fh, offset, size, flags, lock_owner
+        );
+
+        // Was file opened with writting permissions ?
+        if !self.sqs_fs.check_file_handler_mode(fh, libc::R_OK as u16) {
+            reply.error(libc::EPERM);
+            return;
+        }
+
+        // Check if file exists
+        let metadata = match self.sqs_fs.find_by_inode(ino) {
+            Some(metadata) => metadata.clone(),
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        // Read from SQS
+        match self.sqs_fs.read(&metadata) {
+            Ok(content) => reply.data(content.as_bytes()),
+            Err(error) => {
+                // print error for troubleshooting purposes
+                error!("{}", error.to_string());
+                reply.error(libc::ENODATA);
+                return;
+            }
+        }
+    }
+
     fn write(
         &mut self,
         _req: &Request<'_>,
@@ -210,6 +230,12 @@ impl Filesystem for SQSFuse {
         reply.written(written);
     }
 
+    fn release(&mut self, _req: &Request<'_>, ino: u64, fh: u64, flags: i32, _lock_owner: Option<u64>, _flush: bool, reply: ReplyEmpty) {
+        debug!("release ino: {ino} fh: {fh} flags: {flags}");
+        self.sqs_fs.release_file_handler(fh);
+        reply.ok();
+    }
+
     fn readdir(
         &mut self,
         _req: &Request,
@@ -241,12 +267,6 @@ impl Filesystem for SQSFuse {
             }
         }
 
-        reply.ok();
-    }
-
-    fn release(&mut self, _req: &Request<'_>, ino: u64, fh: u64, flags: i32, _lock_owner: Option<u64>, _flush: bool, reply: ReplyEmpty) {
-        debug!("release ino: {ino} fh: {fh} flags: {flags}");
-        self.sqs_fs.release_file_handler(fh);
         reply.ok();
     }
 }

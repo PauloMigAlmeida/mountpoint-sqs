@@ -1,6 +1,8 @@
 use anyhow::anyhow;
 use aws_config::BehaviorVersion;
 use aws_sdk_sqs::Client;
+use aws_sdk_sqs::operation::delete_message::DeleteMessageOutput;
+use aws_sdk_sqs::operation::receive_message::ReceiveMessageOutput;
 use url::Url;
 
 pub struct SQSClient {
@@ -49,6 +51,34 @@ impl SQSClient {
 
     pub fn send_message(&self, queue_url: &str, message: &str) -> anyhow::Result<u32> {
         self.send_message_async(queue_url, message)
+    }
+    #[tokio::main]
+    async fn receive_message_async(&self, queue_url: &str) -> anyhow::Result<ReceiveMessageOutput> {
+        let receive_message_output = self.client.receive_message()
+            .queue_url(queue_url)
+            .max_number_of_messages(1)
+            .send()
+            .await?;
+
+        Ok(receive_message_output)
+    }
+    pub fn receive_message(&self, queue_url: &str) -> anyhow::Result<ReceiveMessageOutput> {
+        self.receive_message_async(queue_url)
+    }
+
+    #[tokio::main]
+    async fn delete_message_async(&self, queue_url: &str, receipt_handle: &str) -> anyhow::Result<DeleteMessageOutput> {
+        let delete_message_output = self.client.delete_message()
+            .queue_url(queue_url)
+            .receipt_handle(receipt_handle)
+            .send()
+            .await?;
+
+        Ok(delete_message_output)
+    }
+
+    pub fn delete_message(&self, queue_url: &str, receipt_handle: &str) -> anyhow::Result<DeleteMessageOutput> {
+        self.delete_message_async(queue_url, receipt_handle)
     }
 }
 

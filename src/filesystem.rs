@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
 use fuser::{FileAttr, FileType};
 use libc::{getgid, getuid};
 use log::debug;
@@ -18,7 +19,6 @@ pub struct Metadata {
 }
 
 struct FileHandleState {
-    inode: u64,
     mode: u16,
 }
 
@@ -128,14 +128,36 @@ impl SQSFileSystem {
         self.superblock.get(&inode)
     }
 
-    pub fn write(&mut self, metadata: &Metadata, data: &str) -> anyhow::Result<u32> {
+    pub fn read(&self, metadata: &Metadata) -> anyhow::Result<String> {
+        let result = self.sqsclient.receive_message(metadata.queue_url.as_str());
+
+        if let Ok(receive_message_output) = result {
+            if let Some(msg) = receive_message_output.messages().first() {
+                if let Some(receipt_handle) = msg.receipt_handle() {
+                    // delete message from SQS before responding to user
+                    self.sqsclient.delete_message(
+                        metadata.queue_url.as_str(),
+                        receipt_handle,
+                    ).context(format!("Error while deleting message with receipt handle: {}", receipt_handle))?;
+                }
+
+                if let Some(body) = msg.body() {
+                    return Ok(body.to_string());
+                }
+            }
+        }
+
+
+        Ok("".to_string())
+    }
+
+    pub fn write(&self, metadata: &Metadata, data: &str) -> anyhow::Result<u32> {
         self.sqsclient.send_message(metadata.queue_url.as_str(), data)
     }
 
-    pub fn create_file_handler(&mut self, inode: u64, mode: u16) -> u64 {
+    pub fn create_file_handler(&mut self, mode: u16) -> u64 {
         let fh = self.next_file_handle.fetch_add(1, Ordering::SeqCst);
         self.fh_map.insert(fh, FileHandleState {
-            inode,
             mode,
         });
         fh
