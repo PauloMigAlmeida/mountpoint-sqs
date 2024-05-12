@@ -64,20 +64,20 @@ impl SQSFileSystem {
         });
 
         // fetch queues
-        let queues = self.sqsclient.list_queues();
+        if let Ok(queues) = self.sqsclient.list_queues() {
+            // add queues
+            let mut fake_ino = 2u64;
+            for queue in queues {
+                self.superblock.insert(fake_ino, Metadata {
+                    queue_name: sqs::get_queue_name(queue.as_str()).unwrap(),
+                    queue_url: queue.clone(),
+                    file_attr: build_fileattr(fake_ino, FileType::RegularFile),
+                });
 
-        // add queues
-        let mut fake_ino = 2u64;
-        for queue in queues.unwrap() {
-            self.superblock.insert(fake_ino, Metadata {
-                queue_name: sqs::get_queue_name(queue.as_str()).unwrap(),
-                queue_url: queue.clone(),
-                file_attr: build_fileattr(fake_ino, FileType::RegularFile),
-            });
+                self.aux_map.insert(queue, fake_ino);
 
-            self.aux_map.insert(queue, fake_ino);
-
-            fake_ino += 1;
+                fake_ino += 1;
+            }
         }
     }
     pub fn list_files(&mut self) -> Vec<&Metadata> {
