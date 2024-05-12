@@ -68,5 +68,5 @@ SQS options:
 To unmount it
 
 ```bash
-fusermount -u mnt_sqs 
+fusermount -u /mnt/sqs 
 ```
