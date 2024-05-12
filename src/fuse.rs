@@ -1,5 +1,4 @@
 use std::ffi::OsStr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use fuser::{Filesystem, FileType, ReplyAttr, ReplyDirectory, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
@@ -11,7 +10,7 @@ use crate::filesystem::{Metadata, SQSFileSystem};
 pub struct SQSFuse {
     sqs_fs: SQSFileSystem,
     default_ttl: Duration,
-    next_file_handle: AtomicU64,
+    // next_file_handle: AtomicU64,
 }
 
 impl SQSFuse {
@@ -19,7 +18,7 @@ impl SQSFuse {
         SQSFuse {
             default_ttl: Duration::from_secs(cli_args.cache_ttl_in_secs),
             sqs_fs: SQSFileSystem::new(cli_args),
-            next_file_handle: AtomicU64::default(),
+            // next_file_handle: AtomicU64::default(),
         }
     }
 }
@@ -135,7 +134,7 @@ impl Filesystem for SQSFuse {
         }
 
         // create file handle
-        let fh = self.next_file_handle.fetch_add(1, Ordering::SeqCst);
+        let fh = self.sqs_fs.create_file_handler(ino, access_mask);
         reply.opened(fh, 0);
     }
 
@@ -175,7 +174,11 @@ impl Filesystem for SQSFuse {
             lock_owner
         );
 
-        //TODO check for open mode
+        // Was file opened with writting permissions ?
+        if !self.sqs_fs.check_file_handler_mode(fh, libc::W_OK as u16) {
+            reply.error(libc::EPERM);
+            return;
+        }
 
         // SQS accepts UTF-8 messages, can we convert data into utf-8?
         let msg = match String::from_utf8(data.to_vec()) {
@@ -195,7 +198,7 @@ impl Filesystem for SQSFuse {
             }
         };
 
-        // send data to SQS
+        // Send data to SQS
         let written = match self.sqs_fs.write(&metadata, msg.as_str()) {
             Ok(written) => written,
             Err(_) => {

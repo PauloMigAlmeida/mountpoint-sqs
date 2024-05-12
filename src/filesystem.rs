@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{FileAttr, FileType};
@@ -16,9 +17,16 @@ pub struct Metadata {
     pub file_attr: FileAttr,
 }
 
+struct FileHandleState {
+    inode: u64,
+    mode: u16,
+}
+
 pub struct SQSFileSystem {
     superblock: BTreeMap<u64, Metadata>,
     aux_map: BTreeMap<String, u64>,
+    fh_map: HashMap<u64, FileHandleState>, //TODO add Lock
+    next_file_handle: AtomicU64,
     sqsclient: SQSClient,
     last_refresh: SystemTime,
     cli_args: CliArgs,
@@ -29,6 +37,8 @@ impl SQSFileSystem {
         SQSFileSystem {
             superblock: BTreeMap::new(),
             aux_map: BTreeMap::new(),
+            fh_map: HashMap::new(),
+            next_file_handle: AtomicU64::default(),
             sqsclient: SQSClient::new(),
             last_refresh: UNIX_EPOCH,
             cli_args,
@@ -120,6 +130,22 @@ impl SQSFileSystem {
 
     pub fn write(&mut self, metadata: &Metadata, data: &str) -> anyhow::Result<u32> {
         self.sqsclient.send_message(metadata.queue_url.as_str(), data)
+    }
+
+    pub fn create_file_handler(&mut self, inode: u64, mode: u16) -> u64 {
+        let fh = self.next_file_handle.fetch_add(1, Ordering::SeqCst);
+        self.fh_map.insert(fh, FileHandleState {
+            inode,
+            mode,
+        });
+        fh
+    }
+
+    pub fn check_file_handler_mode(&self, fh: u64, mode: u16) -> bool {
+        match self.fh_map.get(&fh) {
+            Some(entry) => entry.mode & mode > 0,
+            None => false,
+        }
     }
 }
 
