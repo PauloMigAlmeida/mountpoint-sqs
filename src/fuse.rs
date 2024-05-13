@@ -67,7 +67,7 @@ impl Filesystem for SQSFuse {
         }
 
         if size.is_some() {
-            warn!("truncate() or O_TRUNC flag aren't supported as this doesn't make much sense \
+            warn!("truncate() or O_TRUNC flag aren't supported as this doesn't make much sense in \
             the SQS queues context. Ignoring operation....");
         }
 
@@ -194,7 +194,7 @@ impl Filesystem for SQSFuse {
             lock_owner
         );
 
-        // Was file opened with writting permissions ?
+        // Was file opened with reading permissions ?
         if !self.sqs_fs.check_file_handler_mode(fh, libc::W_OK as u16) {
             reply.error(libc::EPERM);
             return;
