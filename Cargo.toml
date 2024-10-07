@@ -9,7 +9,7 @@ fuser = "0.14.0"
 libc = "0.2.159"
 clap = { version = "4.5.18", features = ["cargo", "derive"] }
 env_logger = "0.11.5"
-procfs = "0.16.0"
+procfs = "0.17.0"
 log = "0.4.22"
 anyhow = "1.0.89"
 aws-config = "1.5.1"
