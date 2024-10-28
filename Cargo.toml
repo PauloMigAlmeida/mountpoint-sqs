@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Paulo Almeida"]
 
 [dependencies]
-fuser = "0.14.0"
+fuser = "0.15.0"
 libc = "0.2.159"
 clap = { version = "4.5.20", features = ["cargo", "derive"] }
 env_logger = "0.11.5"
