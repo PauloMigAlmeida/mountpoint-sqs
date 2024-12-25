@@ -1,7 +1,10 @@
 use std::ffi::OsStr;
 use std::time::{Duration, SystemTime};
 
-use fuser::{Filesystem, FileType, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
+use fuser::{
+    FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
+    ReplyWrite, Request, TimeOrNow,
+};
 use log::{debug, error, info, warn};
 
 use crate::cli::CliArgs;
@@ -32,7 +35,7 @@ impl Filesystem for SQSFuse {
         }
     }
 
-    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         info!("getattr: ino:{ino}");
         let file_metadata = self.sqs_fs.find_by_inode(ino);
 
@@ -44,7 +47,24 @@ impl Filesystem for SQSFuse {
         }
     }
 
-    fn setattr(&mut self, _req: &Request<'_>, ino: u64, mode: Option<u32>, uid: Option<u32>, gid: Option<u32>, size: Option<u64>, atime: Option<TimeOrNow>, mtime: Option<TimeOrNow>, _ctime: Option<SystemTime>, fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, flags: Option<u32>, reply: ReplyAttr) {
+    fn setattr(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        _ctime: Option<SystemTime>,
+        fh: Option<u64>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
+        flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
         debug!(
             "setattr(ino: {:#x?}, mode: {:?}, uid: {:?}, \
             gid: {:?}, size: {:?}, fh: {:?}, flags: {:?})",
@@ -60,15 +80,19 @@ impl Filesystem for SQSFuse {
         };
 
         if mode.is_some() {
-            warn!("chmod() isn't supported - \
-                files given the same uid/gid of the user whom mounted sqsfs");
+            warn!(
+                "chmod() isn't supported - \
+                files given the same uid/gid of the user whom mounted sqsfs"
+            );
             reply.error(libc::ENOSYS);
             return;
         }
 
         if size.is_some() {
-            warn!("truncate() or O_TRUNC flag aren't supported as this doesn't make much sense in \
-            the SQS queues context. Ignoring operation....");
+            warn!(
+                "truncate() or O_TRUNC flag aren't supported as this doesn't make much sense in \
+            the SQS queues context. Ignoring operation...."
+            );
         }
 
         if atime.is_some() || mtime.is_some() {
@@ -90,11 +114,7 @@ impl Filesystem for SQSFuse {
     /// filesystem may set, to change the way the file is opened. See fuse_file_info
     /// structure in <fuse_common.h> for more details.
     fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        debug!(
-            "open(ino: {:#x?}, flags: {:#x?})",
-            ino,
-            flags,
-        );
+        debug!("open(ino: {:#x?}, flags: {:#x?})", ino, flags,);
 
         // Check access mode
         let access_mask = match flags & libc::O_ACCMODE {
@@ -114,7 +134,6 @@ impl Filesystem for SQSFuse {
                 return;
             }
         };
-
 
         // Check if file exists
         let metadata = match self.sqs_fs.find_by_inode(ino) {
@@ -136,7 +155,17 @@ impl Filesystem for SQSFuse {
         reply.opened(fh, 0);
     }
 
-    fn read(&mut self, _req: &Request<'_>, ino: u64, fh: u64, offset: i64, size: u32, flags: i32, lock_owner: Option<u64>, reply: ReplyData) {
+    fn read(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
+        reply: ReplyData,
+    ) {
         debug!(
             "read(ino: {:#x?}, fh: {}, offset: {}, size: {}, \
             flags: {:#x?}, lock_owner: {:?})",
@@ -230,7 +259,16 @@ impl Filesystem for SQSFuse {
         reply.written(written);
     }
 
-    fn release(&mut self, _req: &Request<'_>, ino: u64, fh: u64, flags: i32, _lock_owner: Option<u64>, _flush: bool, reply: ReplyEmpty) {
+    fn release(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        flags: i32,
+        _lock_owner: Option<u64>,
+        _flush: bool,
+        reply: ReplyEmpty,
+    ) {
         debug!("release ino: {ino} fh: {fh} flags: {flags}");
         self.sqs_fs.release_file_handler(fh);
         reply.ok();
@@ -257,7 +295,11 @@ impl Filesystem for SQSFuse {
         ];
 
         for file in self.sqs_fs.list_files() {
-            entries.push((file.file_attr.ino, file.file_attr.kind, file.queue_name.clone()));
+            entries.push((
+                file.file_attr.ino,
+                file.file_attr.kind,
+                file.queue_name.clone(),
+            ));
         }
 
         for (i, entry) in entries.into_iter().enumerate().skip(offset as usize) {
@@ -271,11 +313,7 @@ impl Filesystem for SQSFuse {
     }
 }
 
-fn check_access(
-    file_metadata: &Metadata,
-    req: &Request,
-    access_mask: u16,
-) -> bool {
+fn check_access(file_metadata: &Metadata, req: &Request, access_mask: u16) -> bool {
     let mut owner = false;
     let mut group = false;
     let mut others = false;
