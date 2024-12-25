@@ -1,8 +1,11 @@
 [package]
 name = "mountpoint-sqs"
+description = "Mount SQS as a filesystem"
 version = "0.1.0"
 edition = "2021"
 authors = ["Paulo Almeida"]
+license-file = "LICENSE"
+homepage = "https://github.com/PauloMigAlmeida/mountpoint-sqs"
 
 [dependencies]
 fuser = "0.15.1"
