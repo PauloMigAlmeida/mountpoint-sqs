@@ -10,11 +10,11 @@ homepage = "https://github.com/PauloMigAlmeida/mountpoint-sqs"
 [dependencies]
 fuser = "0.15.1"
 libc = "0.2.171"
-clap = { version = "4.5.32", features = ["cargo", "derive"] }
+clap = { version = "4.5.35", features = ["cargo", "derive"] }
 env_logger = "0.11.6"
 procfs = "0.17.0"
 log = "0.4.27"
-anyhow = "1.0.96"
+anyhow = "1.0.97"
 aws-config = "1.5.12"
 aws-sdk-sqs = "1.52.1"
 tokio = { version = "1.43.0", features = ["full"] }
